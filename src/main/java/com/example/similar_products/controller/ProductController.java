@@ -3,9 +3,12 @@ package com.example.similar_products.controller;
 import com.example.similar_products.model.ProductDetail;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
@@ -24,33 +27,51 @@ public class ProductController {
 
     @CircuitBreaker(name = "similarProducts", fallbackMethod = "fallbackGetSimilarProducts")
     @GetMapping("/product/{productId}/similar")
-    public List<ProductDetail> getSimilarProducts(@PathVariable String productId) {
-        // Obtener los IDs de productos similares
-        String[] similarIds = restTemplate.getForObject(SIMILAR_IDS_URL, String[].class, productId);
+    public ResponseEntity<List<ProductDetail>> getSimilarProducts(@PathVariable String productId) {
+        try {
+            // Obtener los IDs de productos similares
+            String[] similarIds = restTemplate.getForObject(SIMILAR_IDS_URL, String[].class, productId);
 
-        // Obtener los detalles de cada producto similar en paralelo
-        List<CompletableFuture<ProductDetail>> futures = Arrays.stream(similarIds)
-                .map(id -> CompletableFuture.supplyAsync(() -> {
-                    try {
-                        return restTemplate.getForObject(PRODUCT_DETAIL_URL, ProductDetail.class, id);
-                    } catch (Exception e) {
-                        // Manejar excepciones para productos no encontrados o errores del servidor
-                        System.err.println("Error fetching product detail for ID: " + id + " - " + e.getMessage());
-                        return null;
-                    }
-                }))
-                .collect(Collectors.toList());
+            if (similarIds == null || similarIds.length == 0) {
+                return ResponseEntity.ok(List.of()); 
+            }
 
-        // Esperar a que todas las llamadas se completen y recolectar resultados
-        return futures.stream()
-                .map(CompletableFuture::join)
-                .filter(productDetail -> productDetail != null) // Filtrar productos nulos
-                .collect(Collectors.toList());
+  
+            List<CompletableFuture<ProductDetail>> futures = Arrays.stream(similarIds)
+                    .map(id -> CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return restTemplate.getForObject(PRODUCT_DETAIL_URL, ProductDetail.class, id);
+                        } catch (HttpClientErrorException e) {
+                      
+                            System.err.println("Client error while fetching product detail for ID: " + id + " - "
+                                    + e.getMessage());
+                            return null;
+                        } catch (Exception e) {
+                     
+                            System.err.println(
+                                    "Error while fetching product detail for ID: " + id + " - " + e.getMessage());
+                            return null;
+                        }
+                    }))
+                    .collect(Collectors.toList());
+
+         
+            List<ProductDetail> similarProducts = futures.stream()
+                    .map(CompletableFuture::join)
+                    .filter(productDetail -> productDetail != null) 
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(similarProducts);
+        } catch (Exception e) {
+          
+            System.err.println("An error occurred: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(List.of());
+        }
     }
 
-    public List<ProductDetail> fallbackGetSimilarProducts(String productId, Throwable throwable) {
+    public ResponseEntity<List<ProductDetail>> fallbackGetSimilarProducts(String productId, Throwable throwable) {
         // Lógica de fallback en caso de fallo
-        System.out.println("Fallback method called due to: " + throwable.getMessage());
-        return List.of();
+        System.err.println("Fallback method called due to: " + throwable.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(List.of()); 
     }
 }
