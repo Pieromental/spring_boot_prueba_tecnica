@@ -25,19 +25,32 @@ public class ProductController {
     @CircuitBreaker(name = "similarProducts", fallbackMethod = "fallbackGetSimilarProducts")
     @GetMapping("/product/{productId}/similar")
     public List<ProductDetail> getSimilarProducts(@PathVariable String productId) {
+        // Obtener los IDs de productos similares
         String[] similarIds = restTemplate.getForObject(SIMILAR_IDS_URL, String[].class, productId);
 
+        // Obtener los detalles de cada producto similar en paralelo
         List<CompletableFuture<ProductDetail>> futures = Arrays.stream(similarIds)
-                .map(id -> CompletableFuture.supplyAsync(() -> restTemplate.getForObject(PRODUCT_DETAIL_URL, ProductDetail.class, id)))
+                .map(id -> CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return restTemplate.getForObject(PRODUCT_DETAIL_URL, ProductDetail.class, id);
+                    } catch (Exception e) {
+                        // Manejar excepciones para productos no encontrados o errores del servidor
+                        System.err.println("Error fetching product detail for ID: " + id + " - " + e.getMessage());
+                        return null;
+                    }
+                }))
                 .collect(Collectors.toList());
 
+        // Esperar a que todas las llamadas se completen y recolectar resultados
         return futures.stream()
                 .map(CompletableFuture::join)
+                .filter(productDetail -> productDetail != null) // Filtrar productos nulos
                 .collect(Collectors.toList());
     }
 
     public List<ProductDetail> fallbackGetSimilarProducts(String productId, Throwable throwable) {
         // Lógica de fallback en caso de fallo
+        System.out.println("Fallback method called due to: " + throwable.getMessage());
         return List.of();
     }
 }
